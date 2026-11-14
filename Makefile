@@ -1,11 +1,11 @@
 .DEFAULT_GOAL := help
-.PHONY: help install upgrade run mock test lint format clean
+.PHONY: help install upgrade run mock service service-remove test lint format clean
 
-# Extra flags for run and mock, e.g. make run ARGS="--host 0.0.0.0 --safe-start"
+# Extra flags for run, mock and service, e.g. make run ARGS="--host 0.0.0.0 --safe-start"
 ARGS ?=
 
 help: ## List the available commands
-	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install: ## Create .venv with the exact versions from uv.lock, plus dev tools
 	uv sync --locked --extra dev
@@ -19,6 +19,12 @@ run: ## Start the dashboard on the real PSU (ARGS="..." for extra flags)
 
 mock: ## Start the dashboard on the simulated PSU, no hardware needed
 	.venv/bin/udp6720-web --mock $(ARGS)
+
+service: ## Start the dashboard at boot on http://udp6720.local (asks for sudo)
+	./service.sh install $(ARGS)
+
+service-remove: ## Stop the dashboard and remove the boot service
+	./service.sh remove
 
 test: ## Run the tests
 	.venv/bin/python -m pytest -q

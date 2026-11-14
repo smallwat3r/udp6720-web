@@ -42,7 +42,8 @@ answer the same commands, but the limits in this tool are fixed at 60 V and
 - A five minute recorder for voltage, current and power, with a CSV download of
   the last 30 minutes
 - Keyboard shortcuts for everything
-- Recovers on its own when the USB adapter is unplugged and plugged back in
+- Starts without the supply, and connects on its own when the supply is
+  switched on or the USB adapter is plugged back in
 
 ## Hardware
 
@@ -69,7 +70,7 @@ make mock    # simulated supply, no hardware needed
 make run     # real supply on /dev/ttyUSB0, baud rate detected automatically
 ```
 
-Then open <http://localhost:8000>.
+Then open <http://localhost:6720>, or <http://udp6720.localhost:6720>.
 
 Extra flags go through `ARGS`:
 
@@ -83,11 +84,11 @@ make run ARGS="--port /dev/ttyUSB1 --baud 9600 --max-volts 30 --max-amps 2 --saf
 | `--baud` | `auto` | Baud rate, `auto` tries each rate with `*IDN?` |
 | `--mock` | off | Use the simulated supply |
 | `--host` | `127.0.0.1` | Bind address, `0.0.0.0` serves the whole network |
-| `--http-port` | `8000` | Port of the web page |
+| `--http-port` | `6720` | Port of the web page, the model number, chosen to stay clear of commonly used ports |
 | `--poll-hz` | `2` | Readings per second, 0.1 to 10 |
 | `--max-volts` | `60` | Soft voltage limit |
 | `--max-amps` | `5` | Soft current limit |
-| `--safe-start` | off | Force the output off when the dashboard starts |
+| `--safe-start` | off | Force the output off the first time the supply answers |
 | `--off-on-exit` | off | Force the output off when the dashboard stops |
 | `--allow-host` | none | Extra DNS name the page may be opened under |
 
@@ -102,6 +103,46 @@ max_volts = 30.0
 max_amps = 2.0
 safe_start = true
 ```
+
+## Start at boot
+
+On the machine wired to the supply:
+
+```sh
+make service          # install and start a systemd service, asks for sudo
+make service-remove   # stop and remove it
+./service.sh status
+./service.sh logs
+```
+
+The dashboard is then at **<http://udp6720.local>**, on that machine only, with
+no port to remember and nothing to configure.
+
+`make service` does three things:
+
+- installs a systemd service that runs the dashboard as your own user,
+- starts it on port 80, the default web port, which that service is allowed to
+  use,
+- adds `127.0.0.1 udp6720.local` to `/etc/hosts`, so the name points at the
+  machine itself.
+
+`make service-remove` undoes all three.
+
+The supply does not need to be on. The dashboard starts anyway, shows OFFLINE,
+and connects when the supply answers. If you switch the supply off later it goes
+back to OFFLINE and reconnects when the supply returns, without changing the
+output state.
+
+To change how the service runs, pass flags, they replace the default port:
+
+```sh
+make service ARGS="--http-port 6720"                 # if port 80 is taken
+make service ARGS="--http-port 80 --host 0.0.0.0"    # reachable from other devices, no login!
+```
+
+Other settings still come from `~/.config/udp6720/config.toml`. From another
+device the address is `http://<hostname>.local`, the `udp6720.local` name only
+exists on the machine itself.
 
 ## Keyboard shortcuts
 
