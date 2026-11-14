@@ -1,9 +1,12 @@
 """Serial SCPI transport for the UDP6720 (CR+LF framed ASCII, 8N1, no flow control)."""
 
+import logging
 import threading
 import time
 
 import serial
+
+log = logging.getLogger("udp6720")
 
 BAUD_RATES = (9600, 19200, 38400, 57600, 115200)
 # Longest response accepted, a device streaming garbage cannot grow a line without bound
@@ -16,12 +19,16 @@ class TransportError(Exception):
 
 class SerialTransport:
     """One command in flight at a time, the port is reopened after a failure
-    so an unplugged USB adapter recovers without restarting the server."""
+    so an unplugged USB adapter recovers without restarting the server.
+
+    With baud=None the rate is detected when the port is first opened, and again
+    after the device stops answering, so the supply may be switched on, or have its
+    baud rate changed, at any time after the dashboard has started."""
 
     def __init__(
         self,
         port: str,
-        baud: int = 9600,
+        baud: int | None = 9600,
         timeout: float = 0.5,
         retries: int = 1,
         write_delay: float = 0.05,
@@ -29,6 +36,7 @@ class SerialTransport:
     ) -> None:
         self.port = port
         self.baud = baud
+        self._auto_baud = baud is None
         self.timeout = timeout
         self.retries = retries
         # The device sends no acknowledgement for a write, give it time to act
@@ -47,6 +55,9 @@ class SerialTransport:
 
     def _open(self) -> serial.Serial:
         if self._serial is None:
+            if self.baud is None:
+                self.baud, idn = probe(self.port)
+                log.info("found %s at %d baud", idn, self.baud)
             # Exclusive, a second program on the same port would corrupt the framing
             self._serial = serial.Serial(
                 self.port, self.baud, timeout=self.timeout, write_timeout=self.timeout, exclusive=True
@@ -85,7 +96,12 @@ class SerialTransport:
                     raise TransportError(f"{self.port}: {exc}") from exc
                 if line.endswith(b"\n"):
                     return line.decode("ascii", errors="replace").strip()
-            raise TransportError(f"no response to {command!r} on {self.port} at {self.baud} baud")
+            baud = self.baud
+            if self._auto_baud:
+                # Silence may mean the supply was switched off or its rate changed, detect again next time
+                self._drop()
+                self.baud = None
+            raise TransportError(f"no response to {command!r} on {self.port} at {baud} baud")
 
     def close(self) -> None:
         with self._lock:
@@ -105,4 +121,4 @@ def probe(port: str, bauds: tuple[int, ...] = BAUD_RATES) -> tuple[int, str]:
         # Wrong baud rates can still produce a framed line of garbage
         if idn.isprintable() and "," in idn:
             return baud, idn
-    raise TransportError(f"no device answered *IDN? on {port} at any of {bauds}")
+    raise TransportError(f"no power supply answering on {port}, is it switched on and connected?")

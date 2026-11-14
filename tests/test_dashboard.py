@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from udp6720.device import PSU, PSUError
 from udp6720.mock import MockTransport
 from udp6720.presets import PresetStore
+from udp6720.transport import TransportError
 from udp6720.web import create_app, load_config
 
 
@@ -62,8 +63,21 @@ def test_startup_never_changes_the_output(mock, client):
 
 def test_safe_start_forces_output_off(mock, store):
     mock.on = True
-    with TestClient(create_app(PSU(mock), store, safe_start=True)):
+    with TestClient(create_app(PSU(mock), store, poll_hz=10, safe_start=True)):
+        time.sleep(0.3)
         assert mock.on is False
+
+
+def test_safe_start_waits_for_a_supply_that_is_off(mock, store):
+    mock.on = True
+    answer = mock.query
+    mock.query = lambda command: (_ for _ in ()).throw(TransportError("supply is off"))
+    with TestClient(create_app(PSU(mock), store, poll_hz=10, safe_start=True, extra_hosts=("testserver",))) as client:
+        time.sleep(0.3)
+        assert client.get("/api/state").json()["connected"] is False and mock.on is True
+        mock.query = answer  # the supply is switched on
+        time.sleep(0.3)
+        assert client.get("/api/state").json()["connected"] is True and mock.on is False
 
 
 def test_api_controls_the_supply(mock, client):
@@ -84,7 +98,10 @@ def test_cross_site_and_rebinding_requests_are_refused(mock, client):
     evil = {"Origin": "http://evil.example"}
     assert client.post("/api/output", json={"on": True}, headers=evil).status_code == 403
     assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 403
-    assert client.get("/api/state", headers={"Host": "192.168.1.20:8000"}).status_code == 200
+    assert client.get("/api/state", headers={"Host": "192.168.1.20:6720"}).status_code == 200
+    for name in ("udp6720.localhost", "udp6720.local", "anything.localhost:6720"):
+        assert client.get("/api/state", headers={"Host": name}).status_code == 200
+    assert client.get("/api/state", headers={"Host": "udp6720.localhost.evil.example"}).status_code == 403
     assert mock.on is False
 
 
@@ -155,11 +172,8 @@ def test_config_file_and_flags_are_merged_and_type_checked(tmp_path, capsys):
     path.write_text("baud = 9600\npoll_hz = 5\nmax_volts = 30.0\nsafe_start = true\n")
     config = load_config(["--poll-hz", "1", "--port", "/dev/ttyUSB1"], path)
     assert (config.baud, config.poll_hz, config.max_volts, config.safe_start) == (9600, 1.0, 30.0, True)
-    assert (config.port, config.host, load_config([], tmp_path / "missing.toml").baud) == (
-        "/dev/ttyUSB1",
-        "127.0.0.1",
-        "auto",
-    )
+    assert (config.port, str(config.host), config.http_port) == ("/dev/ttyUSB1", "127.0.0.1", 6720)
+    assert load_config([], tmp_path / "missing.toml").baud == "auto"
 
     bad_files = ('poll_hz = "fast"', "max_volts = 61", "http_port = 0", "typo_key = 1", "safe_start = 3", "not toml [")
     for text in bad_files:
@@ -167,7 +181,12 @@ def test_config_file_and_flags_are_merged_and_type_checked(tmp_path, capsys):
         with pytest.raises(SystemExit):
             load_config([], path)
     path.write_text("")
-    for flags in (["--baud", "fast"], ["--poll-hz", "50"], ["--max-amps", "-1"]):
+    for flags in (
+        ["--baud", "fast"],
+        ["--poll-hz", "50"],
+        ["--max-amps", "-1"],
+        ["--host", "not an address"],
+    ):
         with pytest.raises(SystemExit):
             load_config(flags, path)
     assert "poll_hz" in capsys.readouterr().err

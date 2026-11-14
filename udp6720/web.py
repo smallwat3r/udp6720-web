@@ -12,6 +12,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
+from ipaddress import IPv4Address
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -20,12 +21,12 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, PositiveInt, ValidationError
 
 from .device import MODEL_MAX_AMPS, MODEL_MAX_VOLTS, PSU, PSUError, State, Transport
 from .mock import MockTransport
 from .presets import MAX_PRESETS, Preset, PresetStore
-from .transport import SerialTransport, TransportError, probe
+from .transport import SerialTransport, TransportError
 
 log = logging.getLogger("udp6720")
 
@@ -33,6 +34,10 @@ STATIC = Path(__file__).parent / "static"
 CONFIG = Path.home() / ".config" / "udp6720" / "config.toml"
 PRESETS = CONFIG.with_name("presets.json")
 HISTORY_SAMPLES = 3600  # 30 minutes at the default 2 Hz
+# The model number: easy to remember, and clear of the ports development servers fight over
+DEFAULT_HTTP_PORT = 6720
+# service.sh maps this name to the local machine, giving the dashboard a memorable address
+LOCAL_ALIAS = "udp6720.local"
 MAX_BODY = 4096  # bytes, every request this API accepts is far smaller
 SECURITY_HEADERS = {
     # frame-ancestors stops another site framing the page to hijack the output button
@@ -46,8 +51,10 @@ SECURITY_HEADERS = {
 class Monitor:
     """Polls the PSU on a background thread and keeps the latest state and a history."""
 
-    def __init__(self, psu: PSU, poll_hz: float) -> None:
+    def __init__(self, psu: PSU, poll_hz: float, safe_start: bool = False) -> None:
         self.psu = psu
+        # Applied on the first successful contact, the supply may be off when the dashboard starts
+        self._safe_start_pending = safe_start
         self.period = 1.0 / poll_hz
         self.history: deque[State] = deque(maxlen=HISTORY_SAMPLES)
         self.state: State | None = None
@@ -63,6 +70,10 @@ class Monitor:
             try:
                 if self.idn is None:
                     self.idn = self.psu.identify()
+                if self._safe_start_pending:
+                    self.psu.output(False)
+                    self._safe_start_pending = False
+                    log.info("safe start: output forced off")
                 self.state = self.psu.read_state()
                 self.history.append(self.state)
                 self.error = None
@@ -121,6 +132,10 @@ def _request_allowed(request: Request, allowed_hosts: frozenset[str]) -> bool:
         same_origin = origin is None or urlsplit(origin).netloc == host
     except ValueError:  # malformed Host or Origin
         return False
+    # Browsers resolve every *.localhost name to this machine themselves, so a remote
+    # site cannot point one here: they are as safe as "localhost" and make nice short addresses
+    if name.endswith(".localhost"):
+        return same_origin
     try:
         ipaddress.ip_address(name)
     except ValueError:
@@ -134,6 +149,11 @@ def _body_too_large(request: Request) -> bool:
     return "transfer-encoding" in request.headers or not length.isdigit() or int(length) > MAX_BODY
 
 
+def local_name() -> str:
+    """The name this machine answers to on the local network through mDNS, like "bench.local"."""
+    return socket.gethostname().lower().split(".")[0] + ".local"
+
+
 def create_app(
     psu: PSU,
     presets: PresetStore,
@@ -142,15 +162,12 @@ def create_app(
     off_on_exit: bool = False,
     extra_hosts: tuple[str, ...] = (),
 ) -> FastAPI:
-    monitor = Monitor(psu, poll_hz)
+    monitor = Monitor(psu, poll_hz, safe_start)
     hostname = socket.gethostname().lower()
-    allowed_hosts = frozenset({"localhost", hostname, f"{hostname}.local", *extra_hosts})
+    allowed_hosts = frozenset({"localhost", LOCAL_ALIAS, hostname, f"{hostname}.local", local_name(), *extra_hosts})
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        if safe_start:
-            # Fail closed, a safe start that cannot reach the device aborts startup
-            psu.output(False)
         monitor.start()
         yield
         monitor.stop()
@@ -266,8 +283,8 @@ class Config(BaseModel):
     port: str = "/dev/ttyUSB0"
     baud: PositiveInt | Literal["auto"] = "auto"
     mock: bool = False
-    host: str = "127.0.0.1"
-    http_port: int = Field(8000, ge=1, le=65535)
+    host: IPvAnyAddress | Literal["localhost"] = IPv4Address("127.0.0.1")
+    http_port: int = Field(DEFAULT_HTTP_PORT, ge=1, le=65535)
     poll_hz: float = Field(2.0, ge=0.1, le=10)
     max_volts: float = Field(MODEL_MAX_VOLTS, gt=0, le=MODEL_MAX_VOLTS)
     max_amps: float = Field(MODEL_MAX_AMPS, gt=0, le=MODEL_MAX_AMPS)
@@ -288,7 +305,7 @@ def load_config(argv: list[str] | None = None, path: Path = CONFIG) -> Config:
     parser.add_argument("--baud", help="baud rate, or 'auto' to probe with *IDN? (default auto)")
     parser.add_argument("--mock", action="store_true", help="use the simulated PSU, no hardware")
     parser.add_argument("--host", help="bind address, 0.0.0.0 to serve the LAN, no login! (default 127.0.0.1)")
-    parser.add_argument("--http-port", help="default 8000")
+    parser.add_argument("--http-port", help=f"default {DEFAULT_HTTP_PORT}")
     parser.add_argument("--poll-hz", help="readings per second, 0.1 to 10 (default 2)")
     parser.add_argument("--max-volts", help="soft voltage limit")
     parser.add_argument("--max-amps", help="soft current limit")
@@ -314,11 +331,8 @@ def main() -> None:
         if config.mock:
             transport: Transport = MockTransport()
         else:
-            baud = config.baud
-            if baud == "auto":
-                baud, idn = probe(config.port)
-                log.info("found %s at %d baud", idn, baud)
-            transport = SerialTransport(config.port, baud)
+            # No contact with the supply here, it may be off, the poller connects when it appears
+            transport = SerialTransport(config.port, None if config.baud == "auto" else config.baud)
     except (TransportError, ValueError, OSError) as exc:
         raise SystemExit(f"error: {exc}") from exc
 
@@ -330,8 +344,12 @@ def main() -> None:
         config.off_on_exit,
         tuple(h.lower() for h in config.allow_host),
     )
-    log.info("dashboard on http://%s:%d", config.host, config.http_port)
-    uvicorn.run(app, host=config.host, port=config.http_port, access_log=False, log_level="warning")
+    port = "" if config.http_port == 80 else f":{config.http_port}"
+    if config.host == "localhost" or config.host.is_loopback:
+        log.info("dashboard on http://udp6720.localhost%s, this machine only", port)
+    else:
+        log.info("dashboard on http://%s%s, open to the local network, there is no login", local_name(), port)
+    uvicorn.run(app, host=str(config.host), port=config.http_port, access_log=False, log_level="warning")
 
 
 if __name__ == "__main__":
