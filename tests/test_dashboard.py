@@ -105,7 +105,7 @@ def test_page_and_assets_are_served_without_inline_code(client):
     page = client.get("/")
     assert "unsafe" not in page.headers["content-security-policy"]
     assert "<style" not in page.text and "onclick" not in page.text
-    for asset in ("app.js", "app.css", "vendor/preact-htm-3.1.1.js"):
+    for asset in ("app.js", "chart.js", "components.js", "app.css", "vendor/preact-htm-3.1.1.js"):
         assert client.get(f"/static/{asset}").status_code == 200
 
 

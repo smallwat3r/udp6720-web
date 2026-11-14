@@ -115,8 +115,9 @@ safe_start = true
 | `Esc` | Cancel the edit |
 | `1` to `9` | Apply that preset |
 | `N` | Name and store the current setpoints as a preset |
-| `E` | Switch preset reordering and deleting on or off |
-| `←` `→` | Move the selected preset while reordering |
+| `E` | Switch preset editing on or off (store, reorder, delete) |
+| `←` `→` | Move the selected preset while editing |
+| `?` | Show this list on the page |
 
 ## Presets
 

@@ -1,6 +1,8 @@
+// Application state, device commands and keyboard shortcuts
 import { html, render, useEffect, useLayoutEffect, useRef, useState } from "./vendor/preact-htm-3.1.1.js";
+import { Chart, WINDOW_S } from "./chart.js";
+import { Confirm, Help, Icon, Preset, Readout } from "./components.js";
 
-const WINDOW_S = 300;
 const QUANTITIES = [
   { key: "volts", q: "volt", letter: "V", title: "Voltage", idx: 1, digits: 2, ghost: "88.88" },
   { key: "amps", q: "amp", letter: "A", title: "Current", idx: 2, digits: 3, ghost: "8.888" },
@@ -8,7 +10,7 @@ const QUANTITIES = [
 ];
 const [VOLTS, AMPS] = QUANTITIES;
 const MOVE_KEYS = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
-const FOCUS_KEYS = { v: "in-volts", a: "in-amps", c: "in-amps", n: "preset-label" };
+const FOCUS_KEYS = { v: "in-volts", a: "in-amps", c: "in-amps" };
 
 async function api(path, body, method) {
   const res = await fetch(
@@ -22,246 +24,13 @@ async function api(path, body, method) {
   return data;
 }
 
-function niceMax(m) {
-  if (m <= 0) return 1;
-  const pow = 10 ** Math.floor(Math.log10(m));
-  return [1, 2, 5, 10].find((f) => m <= f * pow) * pow;
-}
-
-function drawChart(c, hist, quantity, hover) {
-  const dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth;
-  const h = c.clientHeight;
-  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
-    c.width = Math.round(w * dpr);
-    c.height = Math.round(h * dpr);
-  }
-  const css = getComputedStyle(document.documentElement);
-  const color = (name) => css.getPropertyValue(name).trim();
-  const g = c.getContext("2d");
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, w, h);
-  g.font = `12px ${color("--font")}`;
-
-  const pad = { l: 40, r: 10, t: 18, b: 20 };
-  const now = hist.length ? hist.at(-1)[0] : Date.now() / 1000;
-  const top = niceMax(Math.max(0, ...hist.map((p) => p[quantity.idx])));
-  const x = (t) => pad.l + ((t - (now - WINDOW_S)) / WINDOW_S) * (w - pad.l - pad.r);
-  const y = (v) => h - pad.b - (v / top) * (h - pad.t - pad.b);
-
-  // Dotted graticule: three levels, one division per minute
-  g.lineWidth = 1;
-  g.strokeStyle = color("--glass-grid");
-  g.fillStyle = color("--glass-ink");
-  g.textBaseline = "middle";
-  g.textAlign = "right";
-  g.setLineDash([2, 4]);
-  g.beginPath();
-  for (const v of [0, top / 2, top]) {
-    g.moveTo(pad.l, y(v));
-    g.lineTo(w - pad.r, y(v));
-    g.fillText(String(Number(v.toPrecision(3))), pad.l - 6, y(v));
-  }
-  for (let minute = 0; minute <= WINDOW_S / 60; minute++) {
-    g.moveTo(x(now - minute * 60), pad.t);
-    g.lineTo(x(now - minute * 60), h - pad.b);
-  }
-  g.stroke();
-  g.setLineDash([]);
-  g.textBaseline = "alphabetic";
-  g.textAlign = "left";
-  g.fillText("-5 min", pad.l, h - 4);
-  g.textAlign = "right";
-  g.fillText("now", w - pad.r, h - 4);
-
-  g.lineWidth = 2;
-  g.lineJoin = "round";
-  g.strokeStyle = color(`--${quantity.q}`);
-  g.beginPath();
-  hist.forEach((p, i) => {
-    // A gap in the samples (device unplugged) breaks the line instead of bridging it
-    const gap = i === 0 || p[0] - hist[i - 1][0] > 5;
-    g[gap ? "moveTo" : "lineTo"](x(p[0]), y(p[quantity.idx]));
-  });
-  g.stroke();
-
-  if (hover === null || !hist.length) return;
-  const p = hist.reduce((a, b) => (Math.abs(x(b[0]) - hover) < Math.abs(x(a[0]) - hover) ? b : a));
-  const px = x(p[0]);
-  g.lineWidth = 1;
-  g.strokeStyle = color("--glass-ink");
-  g.beginPath();
-  g.moveTo(px, pad.t);
-  g.lineTo(px, h - pad.b);
-  g.stroke();
-  g.fillStyle = color(`--${quantity.q}`);
-  g.strokeStyle = color("--glass");
-  g.lineWidth = 2;
-  g.beginPath();
-  g.arc(px, y(p[quantity.idx]), 5, 0, 2 * Math.PI);
-  g.fill();
-  g.stroke();
-  g.fillStyle = color("--glass-text");
-  g.textAlign = px > w / 2 ? "right" : "left";
-  const time = new Date(p[0] * 1000).toLocaleTimeString();
-  const text = `${p[quantity.idx].toFixed(quantity.digits)} ${quantity.letter} at ${time}`;
-  g.fillText(text, px > w / 2 ? px - 8 : px + 8, 12);
-}
-
-const Icon = ({ name }) => html`<svg class="icon" aria-hidden="true"><use href=${`#i-${name}`} /></svg>`;
-
-// One window of the display: the value is drawn over a ghost of every segment
-function Readout({ quantity, state, sub, subId }) {
-  const blank = quantity.ghost.replace(/8/g, "-");
-  return html`
-    <div class=${`cell ${quantity.q}`}>
-      <div class="cell-head">
-        <span class="legend">${quantity.title}</span>
-        <span class="num" id=${subId}>${sub}</span>
-      </div>
-      <div class="segments">
-        <span class="digits">
-          <span class="ghost" aria-hidden="true">${quantity.ghost}</span>
-          <span class="lit" id=${quantity.key}>${state ? state[quantity.key].toFixed(quantity.digits) : blank}</span>
-        </span>
-        <small>${quantity.letter}</small>
-      </div>
-    </div>
-  `;
-}
-
-// hist is one array mutated in place, so the resize listener always draws current data
-function Chart({ quantity, hist }) {
-  const canvas = useRef();
-  const hover = useRef(null);
-  const redraw = () => drawChart(canvas.current, hist, quantity, hover.current);
-  useEffect(redraw);
-  useEffect(() => {
-    window.addEventListener("resize", redraw);
-    return () => window.removeEventListener("resize", redraw);
-  }, []);
-  const point = (x) => {
-    hover.current = x;
-    redraw();
-  };
-  return html`
-    <div class=${`plot ${quantity.q}`}>
-      <span class="legend"><i class="swatch"></i>${quantity.title}, ${quantity.letter}</span>
-      <canvas
-        ref=${canvas}
-        id=${`chart-${quantity.key}`}
-        role="img"
-        aria-label=${`Measured ${quantity.title.toLowerCase()} over the last 5 minutes`}
-        onPointerMove=${(e) => point(e.offsetX)}
-        onPointerLeave=${() => point(null)}
-      ></canvas>
-    </div>
-  `;
-}
-
-function Confirm({ request, onDone }) {
-  const dialog = useRef();
-  useEffect(() => {
-    if (!request) return;
-    dialog.current.returnValue = "";
-    dialog.current.showModal();
-    dialog.current.querySelector(".primary").focus();
-  }, [request]);
-  return html`
-    <dialog
-      id="confirm"
-      ref=${dialog}
-      aria-labelledby="confirm-title"
-      aria-describedby="confirm-detail"
-      onClose=${() => onDone(dialog.current.returnValue === "ok")}
-    >
-      <h2 id="confirm-title">${request && request.title}</h2>
-      <p id="confirm-detail" class="num" hidden=${!(request && request.detail)}>${request && request.detail}</p>
-      <form method="dialog">
-        <button value="cancel">Cancel<kbd>Esc</kbd></button>
-        <button class="primary" value="ok">${request && request.action}<kbd>Enter</kbd></button>
-      </form>
-    </dialog>
-  `;
-}
-
-function Preset({ preset, index, last, live, active, onApply, onMove, onDelete }) {
-  const values = `${preset.volts.toFixed(2)} V, ${preset.amps.toFixed(3)} A`;
-  const shortcut = index < 9 ? String(index + 1) : null;
-  return html`
-    <li data-label=${preset.label}>
-      <button
-        type="button"
-        class="use"
-        disabled=${!live}
-        aria-current=${active ? "true" : null}
-        aria-keyshortcuts=${shortcut}
-        onClick=${() => onApply(preset)}
-      >
-        ${shortcut && html`<kbd>${shortcut}</kbd>`}
-        <div><span>${preset.label}</span><span class="sub">${values}</span></div>
-        <i class=${`lamp ${active ? "lit" : ""}`}></i>
-      </button>
-      <button
-        type="button"
-        class="edit"
-        data-move="-1"
-        title="Move earlier"
-        aria-label=${`Move earlier: ${preset.label}`}
-        disabled=${index === 0}
-        onClick=${() => onMove(preset, -1)}
-      >
-        <${Icon} name="left" />
-      </button>
-      <button
-        type="button"
-        class="edit"
-        data-move="1"
-        title="Move later"
-        aria-label=${`Move later: ${preset.label}`}
-        disabled=${last}
-        onClick=${() => onMove(preset, 1)}
-      >
-        <${Icon} name="right" />
-      </button>
-      <button
-        type="button"
-        class="edit"
-        title="Delete preset"
-        aria-label=${`Delete preset: ${preset.label}`}
-        onClick=${() => onDelete(preset, values)}
-      >
-        <${Icon} name="trash" />
-      </button>
-    </li>
-  `;
-}
-
-const Message = ({ id, message }) => html`
-  <p id=${id} class=${`message ${message.error ? "error" : ""}`} role="status">${message.text}</p>
-`;
-
-const Shortcuts = () => html`
-  <p id="keys" aria-label="Keyboard shortcuts">
-    <span><kbd>O</kbd>toggle output</span>
-    <span><kbd>0</kbd>output off now</span>
-    <span><kbd>V</kbd><kbd>A</kbd>edit setpoints</span>
-    <span><kbd>Enter</kbd>apply</span>
-    <span><kbd>Esc</kbd>cancel edit</span>
-    <span><kbd>1</kbd>to<kbd>9</kbd>apply preset</span>
-    <span><kbd>N</kbd>store preset</span>
-    <span><kbd>E</kbd>reorder or delete presets</span>
-    <span><kbd>←</kbd><kbd>→</kbd>move preset while reordering</span>
-  </p>
-`;
-
 function App() {
   const [snap, setSnap] = useState(null);
   const [serverDown, setServerDown] = useState(false);
   const [presets, setPresets] = useState([]);
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState({ text: "" });
-  const [presetMessage, setPresetMessage] = useState({ text: "" });
+  const [help, setHelp] = useState(false);
   const [request, setRequest] = useState(null);
   // What the user typed in each setpoint box, null while a box still mirrors the device
   const [form, setForm] = useState({ volts: null, amps: null });
@@ -304,7 +73,7 @@ function App() {
       .finally(tick);
     api("/api/presets")
       .then(setPresets)
-      .catch((err) => setPresetMessage({ text: err.message, error: true }));
+      .catch((err) => setMessage({ text: err.message, error: true }));
     return () => {
       stopped = true;
       clearTimeout(timer);
@@ -358,10 +127,10 @@ function App() {
   const presetRequest = async (path, body, method, done) => {
     try {
       setPresets(await api(path, body, method));
-      setPresetMessage({ text: done });
+      setMessage({ text: done });
       return true;
     } catch (err) {
-      setPresetMessage({ text: err.message, error: true });
+      setMessage({ text: err.message, error: true });
       return false;
     }
   };
@@ -408,7 +177,7 @@ function App() {
   useEffect(() => {
     const onKey = (e) => {
       const now = latest.current;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || document.getElementById("confirm").open) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || document.querySelector("dialog[open]")) return;
       const typing = e.target instanceof HTMLInputElement;
       if (e.key === "Escape" && typing) {
         // Drop the edit and show the device's values again
@@ -416,7 +185,9 @@ function App() {
         e.target.blur();
         return;
       }
-      if (typing || !now.live) return;
+      if (typing) return;
+      if (e.key === "?") return setHelp(true);
+      if (!now.live) return;
       const key = e.key.toLowerCase();
       if (MOVE_KEYS[e.key] && now.editing) {
         // Moves the focused preset, or the ticked one when the focus is elsewhere
@@ -430,6 +201,11 @@ function App() {
         const box = document.getElementById(FOCUS_KEYS[key]);
         box.focus();
         box.select();
+      } else if (key === "n") {
+        // The name box only exists in edit mode: open it, then focus the box once it is rendered
+        e.preventDefault();
+        setEditing(true);
+        requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("preset-label")?.focus()));
       } else if (key === "e") {
         setEditing((on) => !on);
       } else if (key === "o") {
@@ -486,11 +262,13 @@ function App() {
         setRequest(null);
       }}
     />
+    <${Help} open=${help} onClose=${() => setHelp(false)} />
     <main id="app" class=${live ? "" : "stale"}>
       <header class="nameplate">
         <h1>UDP6720</h1>
         <p class="legend">Programmable DC power supply, 60 V, 5 A, 100 W</p>
         <span id="idn" class="num">${snap && snap.idn}</span>
+        <button id="help-button" type="button" aria-keyshortcuts="?" onClick=${() => setHelp(true)}>Keys<kbd>?</kbd></button>
         <span id="link" class=${`legend ${live ? "live" : ""}`} role="status">
           <i class="lamp"></i>${live ? "Live" : snap || serverDown ? "Offline" : "Connecting"}
         </span>
@@ -501,11 +279,14 @@ function App() {
       </div>
 
       <section class="glass display" aria-label="Measured output">
-        <div id="mode" class="annunciators" role="status" aria-label=${`Mode: ${mode}`}>
-          <span class=${lamp(live && s.output)}>OUT</span>
-          <span class=${lamp(live && s.output && s.mode === "CV")}>CV</span>
-          <span class=${lamp(live && s.output && s.mode === "CC", "warn")}>CC</span>
-          <span class=${lamp(!live && (snap || serverDown), "bad")}>OFFLINE</span>
+        <div class="status-row">
+          <div id="mode" class="annunciators" role="status" aria-label=${`Mode: ${mode}`}>
+            <span class=${lamp(live && s.output)}>OUT</span>
+            <span class=${lamp(live && s.output && s.mode === "CV")}>CV</span>
+            <span class=${lamp(live && s.output && s.mode === "CC", "warn")}>CC</span>
+            <span class=${lamp(!live && (snap || serverDown), "bad")}>OFFLINE</span>
+          </div>
+          <span id="message" class=${message.error ? "error" : ""} role="status">${message.text}</span>
         </div>
         <div class="cells">
           <${Readout} quantity=${VOLTS} state=${s} subId="set-volts" sub=${s && `SET ${s.set_volts.toFixed(2)} V`} />
@@ -538,11 +319,10 @@ function App() {
             ${box(VOLTS)} ${box(AMPS)}
             <button id="apply" class="primary" type="submit" disabled=${!live}>Apply</button>
           </form>
-          <${Message} id="message" message=${message} />
         </fieldset>
       </section>
 
-      <fieldset>
+      <fieldset class="recorder">
         <legend>Recorder, last 5 minutes</legend>
         <a class="corner" href="/api/history.csv" download><${Icon} name="download" />CSV</a>
         <div class="glass plots">${QUANTITIES.map((quantity) => html`<${Chart} quantity=${quantity} hist=${hist} />`)}</div>
@@ -550,9 +330,19 @@ function App() {
 
       <fieldset>
         <legend>Memory</legend>
-        <div class="memory-bar">
+        <button
+          id="edit-presets"
+          class="corner"
+          type="button"
+          aria-pressed=${editing ? "true" : "false"}
+          aria-keyshortcuts="E"
+          onClick=${() => setEditing((on) => !on)}
+        >
+          ${editing ? "Done" : "Edit"}<kbd>E</kbd>
+        </button>
+        ${editing &&
+        html`
           <form id="save-preset" onSubmit=${savePreset}>
-            <kbd>N</kbd>
             <input
               id="preset-label"
               aria-label="New preset label"
@@ -566,16 +356,7 @@ function App() {
             />
             <button type="submit">Store</button>
           </form>
-          <button
-            id="edit-presets"
-            type="button"
-            aria-pressed=${editing ? "true" : "false"}
-            aria-keyshortcuts="E"
-            onClick=${() => setEditing((on) => !on)}
-          >
-            Reorder or delete<kbd>E</kbd>
-          </button>
-        </div>
+        `}
         <ul id="presets" class=${editing ? "editing" : ""}>
           ${presets.map(
             (preset, index) => html`
@@ -593,10 +374,8 @@ function App() {
             `,
           )}
         </ul>
-        <${Message} id="preset-message" message=${presetMessage} />
       </fieldset>
 
-      <${Shortcuts} />
     </main>
   `;
 }
