@@ -118,10 +118,9 @@ function App() {
 
   const applyPreset = async (p) => {
     if (!live) return;
-    const values = `${p.volts.toFixed(2)} V, ${p.amps.toFixed(3)} A`;
-    // Changing the setpoints under a live load asks first
-    if (s.output && !(await ask(`Switch to "${p.label}" while the output is on?`, values, "Switch"))) return;
-    if (await command("/api/setpoints", { volts: p.volts, amps: p.amps }, `Preset "${p.label}" applied.`)) cleanForm();
+    // The server turns the output off before it writes the preset, turning it back on is up to the user
+    const done = s.output ? `Output turned off, preset "${p.label}" applied.` : `Preset "${p.label}" applied.`;
+    if (await command("/api/presets/apply", { label: p.label }, done)) cleanForm();
   };
 
   const presetRequest = async (path, body, method, done) => {

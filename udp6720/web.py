@@ -113,6 +113,10 @@ class Setpoints(BaseModel):
     amps: float | None = Field(None, ge=0, le=MODEL_MAX_AMPS)
 
 
+class Apply(BaseModel):
+    label: str = Field(max_length=40)
+
+
 class Move(BaseModel):
     label: str = Field(max_length=40)
     offset: int = Field(ge=-MAX_PRESETS, le=MAX_PRESETS)
@@ -250,6 +254,24 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return presets.all()
+
+    @app.post("/api/presets/apply")
+    def apply_preset(body: Apply) -> dict:
+        # The values come from the store, never from the request
+        try:
+            preset = presets.get(body.label)
+        except KeyError as exc:
+            raise HTTPException(404, "no such preset") from exc
+
+        def action() -> None:
+            # A preset is a different circuit: the output goes off first, is confirmed off,
+            # and stays off until it is turned on by hand. If it cannot be confirmed off,
+            # psu.output raises and the setpoints are left untouched
+            psu.output(False)
+            psu.set_current(preset.amps)
+            psu.set_voltage(preset.volts)
+
+        return run(action)
 
     @app.post("/api/presets/move")
     def move_preset(body: Move) -> list[Preset]:

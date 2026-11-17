@@ -68,6 +68,13 @@ class PresetStore:
         with self._lock:
             return list(self._presets)
 
+    def get(self, label: str) -> Preset:
+        with self._lock:
+            for preset in self._presets:
+                if preset.label == label:
+                    return preset
+        raise KeyError(label)
+
     def save(self, preset: Preset) -> None:
         """Add a preset, or replace the one with the same label."""
         with self._lock:

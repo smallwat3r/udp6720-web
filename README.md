@@ -154,7 +154,7 @@ exists on the machine itself.
 | `A` | Edit the current limit |
 | `Enter` | Apply the setpoints |
 | `Esc` | Cancel the edit |
-| `1` to `9` | Apply that preset |
+| `1` to `9` | Apply that preset, the output goes off |
 | `N` | Name and store the current setpoints as a preset |
 | `E` | Switch preset editing on or off (store, reorder, delete) |
 | `←` `→` | Move the selected preset while editing |
@@ -166,8 +166,11 @@ Presets are stored in `~/.config/udp6720/presets.json`, so every browser sees
 the same list. A starter set is written on the first run. After that the file
 is only changed by what you do on the page.
 
-Applying a preset while the output is on asks for confirmation, because it
-changes the voltage under a live load.
+Applying a preset always turns the output off first, and only writes the
+preset's setpoints once the supply confirms the output is off. The output then
+stays off until you turn it on again yourself, with `O` or the output button
+on the page, which asks for confirmation as usual. If the supply does not confirm,
+the preset is not applied.
 
 ## Safety
 

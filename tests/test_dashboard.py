@@ -118,6 +118,31 @@ def test_presets_are_saved_replaced_deleted_and_persisted(client, store):
     assert len(PresetStore(store.path).all()) == len(labels)
 
 
+def test_applying_a_preset_turns_the_output_off_first(mock, client):
+    client.post("/api/output", json={"on": True})
+    writes = []
+    write = mock.write
+    mock.write = lambda command: (writes.append(command), write(command))
+    body = client.post("/api/presets/apply", json={"label": "USB device"}).json()
+    assert writes[0] == "OUTP OFF" and mock.on is False
+    assert (body["state"]["set_volts"], body["state"]["set_amps"], body["state"]["output"]) == (5.0, 0.5, False)
+    assert not any(command.startswith("OUTP ON") for command in writes)
+
+
+def test_a_preset_is_not_applied_when_the_output_will_not_turn_off(mock, client):
+    mock.on = True
+    write = mock.write
+    mock.write = lambda command: None if command == "OUTP OFF" else write(command)
+    assert client.post("/api/presets/apply", json={"label": "24 V industrial"}).status_code == 422
+    assert mock.on is True and mock.volts == 5.0
+
+
+def test_an_unknown_preset_changes_nothing(mock, client):
+    mock.on = True
+    assert client.post("/api/presets/apply", json={"label": "No such preset"}).status_code == 404
+    assert mock.on is True and mock.volts == 5.0
+
+
 def test_page_and_assets_are_served_without_inline_code(client):
     page = client.get("/")
     assert "unsafe" not in page.headers["content-security-policy"]

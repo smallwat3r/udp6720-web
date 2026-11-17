@@ -109,7 +109,7 @@ const SHORTCUTS = [
   [["A"], "Edit the current limit"],
   [["Enter"], "Apply the setpoints"],
   [["Esc"], "Cancel an edit or close a dialog"],
-  [["1", "9"], "Apply that preset"],
+  [["1", "9"], "Apply that preset, the output goes off"],
   [["N"], "Name and store the current setpoints"],
   [["E"], "Edit presets: store, reorder, delete"],
   [["←", "→"], "Move the selected preset while editing"],
