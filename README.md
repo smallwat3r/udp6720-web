@@ -3,7 +3,7 @@
 A web dashboard to control and monitor a UNI-T UDP6720 bench power supply
 (60 V, 5 A, 100 W) over its RS232 port.
 
-![The dashboard running against the simulated supply](docs/screenshot.png)
+![A UDP6720 on the shelf, driven by the dashboard on a small screen below it, both showing 3.00 V with the output on](docs/bench.jpg)
 
 ## Why
 
@@ -31,6 +31,8 @@ answer the same commands, but the limits in this tool are fixed at 60 V and
 5 A.
 
 ## What it does
+
+![The dashboard running against the simulated supply](docs/screenshot.png)
 
 - Live voltage, current and power, with the device's setpoints beside them
 - OUT, CV and CC annunciators, CC lights up when the supply is current limiting
