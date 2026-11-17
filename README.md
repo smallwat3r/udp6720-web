@@ -21,7 +21,7 @@ device on the same network.
 
 | Platform | State |
 |---|---|
-| Linux (Raspberry Pi OS, 64-bit) | The target, developed here |
+| Linux (Raspberry Pi OS, 64-bit) | Tested with a real UDP6720 on a Raspberry Pi 5 |
 | Other Linux | Expected to work |
 | macOS | Untested, should work, the port is named like `/dev/cu.usbserial-XXXX` |
 | Windows | Untested, should work with a `COM` port, but UNI-T's own software exists there |
@@ -49,7 +49,8 @@ answer the same commands, but the limits in this tool are fixed at 60 V and
 
 - The UDP6720 has a DB9 RS232 port on the back.
 - Use a USB to RS232 adapter with real RS232 levels (FTDI or genuine Prolific).
-  It appears as `/dev/ttyUSB0`.
+  It appears as `/dev/ttyUSB0`. This is the setup the dashboard is tested
+  with, on a real supply.
 - Your user needs to be in the `dialout` group:
   `sudo usermod -aG dialout $USER`, then log out and in again.
 
