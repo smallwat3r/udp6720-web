@@ -309,7 +309,7 @@ function App() {
             >
               <${Icon} name="power" /><span id="output-text">${s && s.output ? "ON" : "OFF"}</span>
             </button>
-            <p class="legend"><kbd>O</kbd>toggle<kbd>0</kbd>off</p>
+            <p class="legend"><span><kbd>O</kbd>toggle</span><span><kbd>0</kbd>off</span></p>
           </div>
         </fieldset>
         <fieldset>
